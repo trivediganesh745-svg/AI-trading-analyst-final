@@ -21,7 +21,7 @@ app.get("/", (req, res) => {
 
 // 🔹 Step 1: Get Login URL
 app.get("/get-login-url", (req, res) => {
-  const url = `https://api.fyers.in/v3/generate-authcode?client_id=${WHJ9SKCKMK-100}&redirect_uri=${https://www.google.comI}&response_type=code&state=sample`;
+  const url = `https://api.fyers.in/v3/generate-authcode?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&state=sample`;
   res.json({ login_url: url });
 });
 
