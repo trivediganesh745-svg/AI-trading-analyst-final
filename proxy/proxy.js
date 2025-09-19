@@ -1,118 +1,80 @@
+// proxy.js
 const express = require("express");
 const axios = require("axios");
-const WebSocket = require("ws");
 const cors = require("cors");
+const WebSocket = require("ws");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔑 Set these with your own App details
-const FYERS_APP_ID = process.env.FYERS_APP_ID || "YWHJ9SKCKMK-100";  
-const FYERS_SECRET_KEY = process.env.FYERS_SECRET_KEY || "HYXPD49LOS";  
-const FYERS_REDIRECT_URI = process.env.FYERS_REDIRECT_URI || "https://www.google.com";  
+// 🔑 Use environment variables in Render Dashboard → Environment tab
+const CLIENT_ID = process.env.CLIENT_ID;   // e.g. "WHJ9SKCKMK-100"
+const SECRET_KEY = process.env.SECRET_KEY; // HYXPD49LOS
+const REDIRECT_URI = process.env.REDIRECT_URI; // https://www.google.com
+let accessToken = null;
 
-let fyersAccessToken = null;  // stored after login
-let fyersSocket = null;
-
-// ====================================================
-// 1️⃣ Get Login URL
-// ====================================================
-app.get("/get-login-url", (req, res) => {
-  const state = "sample"; // you can randomize for security
-  const url = `https://api.fyers.in/api/v3/generate-authcode?client_id=${FYERS_APP_ID}&redirect_uri=${FYERS_REDIRECT_URI}&response_type=code&state=${state}`;
-  res.json({ loginUrl: url });
+// ✅ Root route
+app.get("/", (req, res) => {
+  res.send("✅ Fyers Proxy Server is running. Use /get-login-url or /get-access-token.");
 });
 
-// ====================================================
-// 2️⃣ Exchange AuthCode for AccessToken
-// ====================================================
+// 🔹 Step 1: Get Login URL
+app.get("/get-login-url", (req, res) => {
+  const url = `https://api.fyers.in/v3/generate-authcode?client_id=${WHJ9SKCKMK-100}&redirect_uri=${https://www.google.comI}&response_type=code&state=sample`;
+  res.json({ login_url: url });
+});
+
+// 🔹 Step 2: Exchange authCode for Access Token
 app.post("/get-access-token", async (req, res) => {
   const { authCode } = req.body;
-
-  if (!authCode) {
-    return res.status(400).json({ error: "Missing authCode in request body" });
-  }
+  if (!authCode) return res.status(400).json({ error: "authCode is required" });
 
   try {
-    const response = await axios.post("https://api.fyers.in/api/v3/token", {
-      client_id: FYERS_APP_ID,
-      secret_key: FYERS_SECRET_KEY,
-      redirect_uri: FYERS_REDIRECT_URI,
+    const response = await axios.post("https://api.fyers.in/api/v3/validate-authcode", {
       grant_type: "authorization_code",
-      code: authCode
+      appIdHash: CLIENT_ID,
+      secret_key: SECRET_KEY,
+      redirect_uri: REDIRECT_URI,
+      auth_code: authCode
     });
 
-    fyersAccessToken = response.data.access_token; // 🔑 save token
-    console.log("✅ Access Token Stored:", fyersAccessToken);
-
-    res.json({ success: true, token: fyersAccessToken });
-  } catch (error) {
-    console.error("❌ Error getting access token:", error.response?.data || error.message);
-    res.status(500).json({ error: error.message || "Failed to get access token" });
+    accessToken = response.data.access_token;
+    res.json({ access_token: accessToken });
+  } catch (err) {
+    console.error("Error fetching access token:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to fetch access token", details: err.response?.data });
   }
 });
 
-// ====================================================
-// 3️⃣ WebSocket Handling (for frontend clients)
-// ====================================================
-const server = require("http").createServer(app);
+// 🔹 Step 3: WebSocket Proxy
+const server = app.listen(process.env.PORT || 10000, () => {
+  console.log(`🚀 Proxy server running on port ${process.env.PORT || 10000}`);
+});
+
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws) => {
-  console.log("🌐 New WebSocket client connected.");
+  console.log("Frontend connected to WebSocket proxy");
+
+  if (!accessToken) {
+    ws.send(JSON.stringify({ error: "No access token. Please login first." }));
+    ws.close();
+    return;
+  }
+
+  const fyersWS = new WebSocket(`wss://api.fyers.in/socket/v3/data?token=${CLIENT_ID}:${accessToken}`);
+
+  fyersWS.on("open", () => console.log("Connected to Fyers WebSocket"));
+
+  fyersWS.on("message", (msg) => {
+    ws.send(msg.toString());
+  });
 
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
-
-    if (data.type === "subscribe" && data.instrument) {
-      if (!fyersAccessToken) {
-        ws.send(JSON.stringify({ error: "⚠️ No access token. Please log in first." }));
-        return;
-      }
-
-      const url = `wss://api-t.fyers.in/socket/v2/data?token=${FYERS_APP_ID}:${fyersAccessToken}&data_type=symbolData`;
-
-      fyersSocket = new WebSocket(url);
-
-      fyersSocket.on("open", () => {
-        console.log("📡 Connected to Fyers WS");
-        ws.send(JSON.stringify({ status: "connected" }));
-
-        fyersSocket.send(
-          JSON.stringify({ symbol: data.instrument, dataType: "symbolData" })
-        );
-      });
-
-      fyersSocket.on("message", (message) => {
-        ws.send(message.toString());
-      });
-
-      fyersSocket.on("close", () => {
-        console.log("❌ Fyers WebSocket closed");
-        ws.send(JSON.stringify({ status: "fyers_ws_closed" }));
-      });
-
-      fyersSocket.on("error", (err) => {
-        console.error("⚠️ Fyers WebSocket error:", err.message);
-        ws.send(JSON.stringify({ error: "Fyers WebSocket failed" }));
-      });
-    }
+    fyersWS.send(msg.toString());
   });
 
-  ws.on("close", () => {
-    console.log("🔌 Client disconnected");
-    if (fyersSocket) {
-      fyersSocket.close();
-    }
-  });
+  fyersWS.on("close", () => ws.close());
+  fyersWS.on("error", (err) => console.error("Fyers WS error:", err));
 });
-
-// ====================================================
-// 4️⃣ Start server
-// ====================================================
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-  console.log(`🚀 Proxy server running on port ${PORT}`);
-});
-
