@@ -26,8 +26,8 @@ app.post('/get-login-url', (req, res) => {
         return res.status(400).json({ error: 'redirectUri is required' });
     }
 
-    // Construct login URL manually
-    const loginUrl = `https://api.fyers.in/api/v2/generate-authcode?client_id=${FYERS_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=sample_state`;
+    // ✅ Updated to API v3
+    const loginUrl = `https://api.fyers.in/api/v3/generate-authcode?client_id=${FYERS_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=sample_state`;
     console.log('Generated Login URL:', loginUrl);
     res.json({ loginUrl });
 });
@@ -72,8 +72,8 @@ wsServer.on('connection', (ws) => {
 
                 if (fyersSocket) fyersSocket.close();
 
-                // Connect to Fyers public WebSocket
-                const url = `wss://api-ws.fyers.in/socket/v2/data?token=${FYERS_APP_ID}:${data.accessToken}&data_type=symbolData`;
+                // ✅ Updated to API v3
+                const url = `wss://api.fyers.in/socket/v3/data?token=${FYERS_APP_ID}:${data.accessToken}&data_type=symbolData`;
                 fyersSocket = new WebSocket(url);
 
                 fyersSocket.on('open', () => {
@@ -106,4 +106,3 @@ wsServer.on('connection', (ws) => {
 server.listen(port, () => {
     console.log(`Proxy server running on port ${port}`);
 });
-
