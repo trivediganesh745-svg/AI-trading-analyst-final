@@ -6,11 +6,11 @@
   "scripts": {
     "start": "node proxy.js"
   },
-  "dependencies": {
-    "@fyers-api/rest": "^1.1.0",
-    "@fyers-api/websocket": "^1.1.0",
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "ws": "^8.17.0"
-  }
+ "dependencies": {
+  "fyers-api-v3": "^1.0.0",
+  "cors": "^2.8.5",
+  "express": "^4.19.2",
+  "ws": "^8.17.0",
+  "axios": "^1.7.7"
+}
 }
