@@ -1,16 +1,15 @@
 {
   "name": "fyers-proxy-server-modern",
   "version": "1.0.0",
-  "description": "Proxy for Fyers V3 API using modern libraries",
+  "description": "Proxy for Fyers V3 API using axios and ws",
   "main": "proxy.js",
   "scripts": {
     "start": "node proxy.js"
   },
- "dependencies": {
-  "fyers-api-v3": "^1.0.0",
-  "cors": "^2.8.5",
-  "express": "^4.19.2",
-  "ws": "^8.17.0",
-  "axios": "^1.7.7"
-}
+  "dependencies": {
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
 }
