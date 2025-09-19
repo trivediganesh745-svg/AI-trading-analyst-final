@@ -1,0 +1,5 @@
+{
+  "name": "Personal AI Trading Analyst",
+  "description": "A web application that uses a real Fyers API login to stream live market data via a backend proxy. It connects to the Gemini API for analysis and provides trading signals.",
+  "requestFramePermissions": []
+}
