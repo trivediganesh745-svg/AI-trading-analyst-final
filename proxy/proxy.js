@@ -1,9 +1,7 @@
-
 const express = require("express");
 const axios = require("axios");
-const cors =require("cors");
+const cors = require("cors");
 const WebSocket = require("ws");
-const crypto = require("crypto");
 const protobuf = require("protobufjs");
 const http = require("http");
 
@@ -11,20 +9,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- Environment Variable Validation ---
-const { FYERS_APP_ID, FYERS_SECRET_KEY, FYERS_REDIRECT_URI, PORT } = process.env;
+const {
+    FYERS_APP_ID,
+    FYERS_SECRET_KEY,
+    FYERS_REDIRECT_URI,
+    PORT
+} = process.env;
 
 if (!FYERS_APP_ID || !FYERS_SECRET_KEY || !FYERS_REDIRECT_URI) {
-    console.error("❌ FATAL ERROR: Missing one or more required Fyers environment variables (FYERS_APP_ID, FYERS_SECRET_KEY, FYERS_REDIRECT_URI).");
+    console.error("❌ Missing environment variables (FYERS_APP_ID, FYERS_SECRET_KEY, FYERS_REDIRECT_URI).");
     process.exit(1);
 }
 
-// This will be populated after successful authentication
 let fyersAccessToken = null;
+let fyersRefreshToken = null;
 
 const FYERS_API_V3_BASE = "https://api.fyers.in/api/v3";
 
-// --- Protobuf Definition for Fyers Market Data ---
+// --- Protobuf Definition ---
 const proto_def = `
 syntax = "proto3";
 message MarketData {
@@ -33,66 +35,93 @@ message MarketData {
     int64 volume = 3;
 }
 `;
-const root = protobuf.parse(proto_def).root;
+const root = require("protobufjs").parse(proto_def).root;
 const MarketData = root.lookupType("MarketData");
 
-// --- API Routes ---
+// --- Routes ---
 
-// Health check route
+// Health check
 app.get("/", (req, res) => {
-    res.send("✅ Fyers Proxy Server is running and healthy.");
+    res.send("✅ Fyers Proxy Server is running.");
 });
 
-// 1. Generate the Fyers authentication URL for the user to log in
+// Step 1: Generate login URL
 app.get("/generate-auth-url", (req, res) => {
-    const url = `${FYERS_API_V3_BASE}/generate-authcode?client_id=${FYERS_APP_ID}&redirect_uri=${encodeURIComponent(FYERS_REDIRECT_URI)}&response_type=code&state=sample_state`;
-    console.log("🚀 Generated Fyers Auth URL.");
-    res.json({ url });
+    const authUrl = `${FYERS_API_V3_BASE}/generate-authcode?client_id=${FYERS_APP_ID}&redirect_uri=${encodeURIComponent(FYERS_REDIRECT_URI)}&response_type=code&state=some_state`;
+    console.log("🔗 Login URL generated.");
+    res.json({ url: authUrl });
 });
 
-// 2. Exchange the temporary auth_code for a permanent access_token
+// Step 2: Exchange code for token
 app.post("/exchange-token", async (req, res) => {
     const { auth_code } = req.body;
     if (!auth_code) {
-        return res.status(400).json({ error: "Missing required parameter: auth_code." });
+        return res.status(400).json({ error: "Missing auth_code" });
     }
 
     try {
-        const appIdHash = crypto
-            .createHash("sha256")
-            .update(`${FYERS_APP_ID}:${FYERS_SECRET_KEY}`)
-            .digest("hex");
-
         const response = await axios.post(`${FYERS_API_V3_BASE}/token`, {
             grant_type: "authorization_code",
-            appIdHash,
+            client_id: FYERS_APP_ID,
+            secret_key: FYERS_SECRET_KEY,
             code: auth_code,
+            redirect_uri: FYERS_REDIRECT_URI
         });
 
-        if (!response.data || !response.data.access_token) {
-            throw new Error("Access token not found in Fyers response.");
+        const { access_token, refresh_token } = response.data;
+
+        if (!access_token) {
+            throw new Error("Access token missing from response");
         }
 
-        fyersAccessToken = response.data.access_token;
-        console.log("✅ Successfully obtained Fyers access token.");
-        res.json({ access_token: fyersAccessToken });
+        fyersAccessToken = access_token;
+        fyersRefreshToken = refresh_token;
+
+        console.log("✅ Access token received.");
+        res.json({ access_token, refresh_token });
 
     } catch (err) {
-        console.error("❌ Error during token exchange:", err.response ? err.response.data : err.message);
-        res.status(err.response?.status || 500).json({ error: "Failed to exchange Fyers authorization code for an access token. " + (err.response?.data?.message || err.message) });
+        console.error("❌ Token exchange failed:", err.response?.data || err.message);
+        res.status(500).json({ error: "Failed to exchange token", details: err.response?.data || err.message });
     }
 });
 
-// --- WebSocket Server Logic ---
+// Optional: Token refresh endpoint
+app.post("/refresh-token", async (req, res) => {
+    try {
+        if (!fyersRefreshToken) {
+            return res.status(400).json({ error: "No refresh token available" });
+        }
+
+        const response = await axios.post(`${FYERS_API_V3_BASE}/token`, {
+            grant_type: "refresh_token",
+            client_id: FYERS_APP_ID,
+            secret_key: FYERS_SECRET_KEY,
+            refresh_token: fyersRefreshToken
+        });
+
+        const { access_token, refresh_token } = response.data;
+
+        fyersAccessToken = access_token;
+        fyersRefreshToken = refresh_token;
+
+        console.log("♻️ Access token refreshed.");
+        res.json({ access_token, refresh_token });
+
+    } catch (err) {
+        console.error("❌ Token refresh failed:", err.response?.data || err.message);
+        res.status(500).json({ error: "Failed to refresh token", details: err.response?.data || err.message });
+    }
+});
+
+// --- WebSocket Integration ---
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-let fyersWS = null; // Holds the single connection to Fyers
-const clientSockets = new Set(); // Holds all connected frontend clients
+let fyersWS = null;
+const clientSockets = new Set();
 
-// Function to establish and manage the connection to the Fyers WebSocket
 const connectToFyers = (token) => {
-    // Prevent multiple connections
     if (fyersWS && (fyersWS.readyState === WebSocket.OPEN || fyersWS.readyState === WebSocket.CONNECTING)) {
         return;
     }
@@ -103,27 +132,30 @@ const connectToFyers = (token) => {
     console.log("🔌 Connecting to Fyers WebSocket...");
     fyersWS = new WebSocket(wsUrl);
 
-    fyersWS.on("open", () => console.log("✅ Fyers WebSocket connection established."));
+    fyersWS.on("open", () => {
+        console.log("✅ Connected to Fyers WebSocket.");
+    });
 
-    // Forward market data from Fyers to all connected frontend clients
     fyersWS.on("message", (msg) => {
         try {
             const decoded = MarketData.decode(msg);
-            const tickJson = JSON.stringify({ type: "tick", data: decoded });
+            const data = JSON.stringify({ type: "tick", data: decoded });
             clientSockets.forEach(client => {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(tickJson)
-              }
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(data);
+                }
             });
         } catch (e) {
-            console.error("Protobuf decode error:", e);
+            console.error("❌ Protobuf decode error:", e.message);
         }
     });
 
     fyersWS.on("close", (code) => {
-        console.warn(`⚠️ Fyers WebSocket connection closed with code: ${code}`);
+        console.warn(`⚠️ Fyers WebSocket closed (code: ${code})`);
         fyersWS = null;
-        clientSockets.forEach(client => client.send(JSON.stringify({ type: "error", message: "Fyers data feed disconnected." })));
+        clientSockets.forEach(client =>
+            client.send(JSON.stringify({ type: "error", message: "Fyers WebSocket disconnected" }))
+        );
     });
 
     fyersWS.on("error", (err) => {
@@ -131,12 +163,10 @@ const connectToFyers = (token) => {
     });
 };
 
-// Handle new connections from the frontend application
 wss.on("connection", (ws) => {
-    console.log("🧩 Frontend client connected.");
+    console.log("🧩 Frontend WebSocket connected.");
     clientSockets.add(ws);
 
-    // Handle messages from the frontend (subscribe/unsubscribe)
     ws.on("message", (msg) => {
         try {
             const parsed = JSON.parse(msg);
@@ -144,22 +174,19 @@ wss.on("connection", (ws) => {
 
             if (parsed.type === "subscribe") {
                 if (!tokenToUse) {
-                    ws.send(JSON.stringify({ error: "Cannot subscribe. Fyers access token is missing." }));
-                    return;
+                    return ws.send(JSON.stringify({ error: "Missing access token for subscription." }));
                 }
-                
-                // Ensure connection to Fyers is active before subscribing
+
                 connectToFyers(tokenToUse);
 
                 const subscribe = () => {
                     if (fyersWS?.readyState === WebSocket.OPEN) {
                         const sub = { T: "SUB_DATA", symbol: [parsed.instrument] };
                         fyersWS.send(JSON.stringify(sub));
-                        console.log("✅ Sent subscription request:", sub);
+                        console.log("📡 Subscribed to:", parsed.instrument);
                     }
                 };
-                
-                // If already connected, subscribe immediately. Otherwise, wait for the connection to open.
+
                 if (fyersWS?.readyState === WebSocket.OPEN) {
                     subscribe();
                 } else {
@@ -170,21 +197,22 @@ wss.on("connection", (ws) => {
             if (parsed.type === "unsubscribe" && fyersWS?.readyState === WebSocket.OPEN) {
                 const unsub = { T: "UNSUB_DATA", symbol: [parsed.instrument] };
                 fyersWS.send(JSON.stringify(unsub));
-                console.log("🛑 Sent unsubscribe request:", unsub);
+                console.log("🛑 Unsubscribed from:", parsed.instrument);
             }
         } catch (e) {
-            console.error("Error processing message from frontend:", e.message);
+            console.error("❌ Error handling frontend message:", e.message);
         }
     });
 
     ws.on("close", () => {
-        console.log("❌ Frontend client disconnected.");
+        console.log("❌ Frontend WebSocket disconnected.");
         clientSockets.delete(ws);
     });
 });
 
-// --- Start Server ---
+// Start server
 const port = PORT || 10000;
 server.listen(port, () => {
-    console.log(`🚀 Fyers Proxy Server listening on port ${port}`);
+    console.log(`🚀 Fyers Proxy running on port ${port}`);
 });
+
