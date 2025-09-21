@@ -79,12 +79,18 @@ app.post("/exchange-token", async (req, res) => {
 });
 
 // --- Serve Frontend ---
-const buildPath = path.join(__dirname, 'dist');
+const buildPath = path.join(process.cwd(), 'dist');
 app.use(express.static(buildPath));
 
 // For any other request, serve the index.html file
 app.get('*', (req, res) => {
-  res.sendFile(path.join(buildPath, 'index.html'));
+  const indexPath = path.join(buildPath, 'index.html');
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      console.error('Error sending index.html:', err);
+      res.status(500).send('Could not load the application.');
+    }
+  });
 });
 
 
